@@ -93,40 +93,18 @@ static inline int lcm_close_socket(SOCKET fd)
 #endif
 }
 
-static inline int lcm_timeval_compare(const GTimeVal *a, const GTimeVal *b)
+static inline int lcm_timestamp_compare(const int64_t a, const int64_t b)
 {
-    if (a->tv_sec == b->tv_sec && a->tv_usec == b->tv_usec)
+    if (a == b)
         return 0;
-    if (a->tv_sec > b->tv_sec || (a->tv_sec == b->tv_sec && a->tv_usec > b->tv_usec))
+    if (a > b)
         return 1;
     return -1;
 }
 
-static inline void lcm_timeval_add(const GTimeVal *a, const GTimeVal *b, GTimeVal *dest)
-{
-    dest->tv_sec = a->tv_sec + b->tv_sec;
-    dest->tv_usec = a->tv_usec + b->tv_usec;
-    if (dest->tv_usec > 999999) {
-        dest->tv_usec -= 1000000;
-        dest->tv_sec++;
-    }
-}
-
-static inline void lcm_timeval_subtract(const GTimeVal *a, const GTimeVal *b, GTimeVal *dest)
-{
-    dest->tv_sec = a->tv_sec - b->tv_sec;
-    dest->tv_usec = a->tv_usec - b->tv_usec;
-    if (dest->tv_usec < 0) {
-        dest->tv_usec += 1000000;
-        dest->tv_sec--;
-    }
-}
-
 static inline int64_t lcm_timestamp_now()
 {
-    GTimeVal tv;
-    g_get_current_time(&tv);
-    return (int64_t) tv.tv_sec * 1000000 + tv.tv_usec;
+    return g_get_real_time();
 }
 
 /******************** message buffer **********************/

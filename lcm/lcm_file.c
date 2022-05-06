@@ -75,9 +75,7 @@ static void lcm_logprov_destroy(lcm_logprov_t *lr)
 
 static int64_t timestamp_now(void)
 {
-    GTimeVal tv;
-    g_get_current_time(&tv);
-    return (int64_t) tv.tv_sec * 1000000 + tv.tv_usec;
+    return g_get_real_time();
 }
 
 static void *timer_thread(void *user)
@@ -223,7 +221,7 @@ static lcm_provider_t *lcm_logprov_create(lcm_t *parent, const char *target, con
         }
 
         /* Start the reader thread */
-        lr->timer_thread = g_thread_create(timer_thread, lr, TRUE, NULL);
+        lr->timer_thread = g_thread_new("timer_thread", timer_thread, lr);
         if (!lr->timer_thread) {
             fprintf(stderr, "Error: LCM failed to start timer thread\n");
             lcm_logprov_destroy(lr);
@@ -326,10 +324,7 @@ static int lcm_logprov_publish(lcm_logprov_t *lcm, const char *channel, const vo
     lcm_eventlog_event_t *le = (lcm_eventlog_event_t *) malloc(mem_sz);
     memset(le, 0, mem_sz);
 
-    GTimeVal tv;
-    g_get_current_time(&tv);
-    le->timestamp = (int64_t) tv.tv_sec * 1000000 + tv.tv_usec;
-    ;
+    le->timestamp = g_get_real_time();
     le->channellen = channellen;
     le->datalen = datalen;
     // log_write_event will handle le.eventnum.

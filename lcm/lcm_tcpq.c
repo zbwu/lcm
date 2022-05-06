@@ -57,9 +57,7 @@ static int _close_socket(int fd)
 
 static int64_t timestamp_now(void)
 {
-    GTimeVal tv;
-    g_get_current_time(&tv);
-    return (int64_t) tv.tv_sec * 1000000 + tv.tv_usec;
+    return g_get_real_time();
 }
 
 static int _recv_fully(int fd, void *b, int len)

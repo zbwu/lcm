@@ -21,9 +21,14 @@ typedef int SOCKET;
 
 #define LCM_DEFAULT_URL "udpm://239.255.76.67:7667?ttl=0"
 
+typedef struct {
+    int depth;
+    GRecMutex mutex;
+} LCMRecMutex;
+
 struct _lcm_t {
-    GStaticRecMutex mutex;         // guards data structures
-    GStaticRecMutex handle_mutex;  // only one thread allowed in lcm_handle at a time
+    LCMRecMutex mutex;         // guards data structures
+    GRecMutex handle_mutex;  // only one thread allowed in lcm_handle at a time
 
     GPtrArray *handlers_all;   // list containing *all* handlers
     GHashTable *handlers_map;  // map of channel name (string) to GPtrArray
@@ -54,6 +59,55 @@ extern void lcm_logprov_provider_init(GPtrArray *providers);
 extern void lcm_tcpq_provider_init(GPtrArray *providers);
 extern void lcm_mpudpm_provider_init(GPtrArray *providers);
 extern void lcm_memq_provider_init(GPtrArray *providers);
+
+static inline void lcm_rec_mutex_init(LCMRecMutex *mutex)
+{
+    mutex->depth = 0;
+    g_rec_mutex_init(&mutex->mutex);
+}
+
+static inline void lcm_rec_mutex_clear(LCMRecMutex *mutex)
+{
+    mutex->depth = 0;
+    g_rec_mutex_clear(&mutex->mutex);
+}
+
+static inline void lcm_rec_mutex_lock(LCMRecMutex *mutex)
+{
+    mutex->depth++;
+    g_rec_mutex_lock(&mutex->mutex);
+}
+
+static inline void lcm_rec_mutex_unlock(LCMRecMutex *mutex)
+{
+    mutex->depth--;
+    g_rec_mutex_unlock(&mutex->mutex);
+}
+
+static inline void lcm_rec_mutex_lock_full(LCMRecMutex *mutex, guint depth)
+{
+    while (depth--)
+    {
+        g_rec_mutex_lock (&mutex->mutex);
+        mutex->depth++;
+    }
+}
+
+static inline guint lcm_rec_mutex_unlock_full(LCMRecMutex *mutex)
+{
+    gint depth;
+    gint i;
+
+    /* all access to mutex->depth done while still holding the lock */
+    depth = mutex->depth;
+    i = mutex->depth;
+    mutex->depth = 0;
+
+    while (i--)
+        g_rec_mutex_unlock (&mutex->mutex);
+
+    return depth;
+}
 
 lcm_t *lcm_create(const char *url)
 {
@@ -116,8 +170,8 @@ lcm_t *lcm_create(const char *url)
     lcm->handlers_all = g_ptr_array_new();
     lcm->handlers_map = g_hash_table_new(g_str_hash, g_str_equal);
 
-    g_static_rec_mutex_init(&lcm->mutex);
-    g_static_rec_mutex_init(&lcm->handle_mutex);
+    lcm_rec_mutex_init(&lcm->mutex);
+    g_rec_mutex_init(&lcm->handle_mutex);
 
     lcm->provider = info->vtable->create(lcm, network, args);
     lcm->in_handle = 0;
@@ -186,8 +240,8 @@ void lcm_destroy(lcm_t *lcm)
     }
     g_ptr_array_free(lcm->handlers_all, TRUE);
 
-    g_static_rec_mutex_free(&lcm->handle_mutex);
-    g_static_rec_mutex_free(&lcm->mutex);
+    g_rec_mutex_clear(&lcm->handle_mutex);
+    lcm_rec_mutex_clear(&lcm->mutex);
     free(lcm);
 #ifdef WIN32
     WSACleanup();
@@ -198,12 +252,12 @@ int lcm_handle(lcm_t *lcm)
 {
     if (lcm->provider && lcm->vtable->handle) {
         int ret;
-        g_static_rec_mutex_lock(&lcm->handle_mutex);
+        g_rec_mutex_lock(&lcm->handle_mutex);
         assert(!lcm->in_handle);  // recursive calls to lcm_handle are not allowed
         lcm->in_handle = 1;
         ret = lcm->vtable->handle(lcm->provider);
         lcm->in_handle = 0;
-        g_static_rec_mutex_unlock(&lcm->handle_mutex);
+        g_rec_mutex_unlock(&lcm->handle_mutex);
         return ret;
     } else
         return -1;
@@ -310,17 +364,17 @@ lcm_subscription_t *lcm_subscribe(lcm_t *lcm, const char *channel, lcm_msg_handl
         free(h);
         return NULL;
     }
-    g_static_rec_mutex_lock(&lcm->mutex);
+    lcm_rec_mutex_lock(&lcm->mutex);
     g_ptr_array_add(lcm->handlers_all, h);
     g_hash_table_foreach(lcm->handlers_map, map_add_handler_callback, h);
-    g_static_rec_mutex_unlock(&lcm->mutex);
+    lcm_rec_mutex_unlock(&lcm->mutex);
 
     return h;
 }
 
 int lcm_unsubscribe(lcm_t *lcm, lcm_subscription_t *h)
 {
-    g_static_rec_mutex_lock(&lcm->mutex);
+    lcm_rec_mutex_lock(&lcm->mutex);
 
     // remove the handler from the master list
     int foundit = g_ptr_array_remove(lcm->handlers_all, h);
@@ -338,7 +392,7 @@ int lcm_unsubscribe(lcm_t *lcm, lcm_subscription_t *h)
             h->marked_for_deletion = 1;
     }
 
-    g_static_rec_mutex_unlock(&lcm->mutex);
+    lcm_rec_mutex_unlock(&lcm->mutex);
 
     return foundit ? 0 : -1;
 }
@@ -347,7 +401,7 @@ int lcm_unsubscribe(lcm_t *lcm, lcm_subscription_t *h)
 
 GPtrArray *lcm_get_handlers(lcm_t *lcm, const char *channel)
 {
-    g_static_rec_mutex_lock(&lcm->mutex);
+    lcm_rec_mutex_lock(&lcm->mutex);
     GPtrArray *handlers = (GPtrArray *) g_hash_table_lookup(lcm->handlers_map, channel);
     if (handlers)
         goto finished;
@@ -366,13 +420,13 @@ GPtrArray *lcm_get_handlers(lcm_t *lcm, const char *channel)
     }
 
 finished:
-    g_static_rec_mutex_unlock(&lcm->mutex);
+    lcm_rec_mutex_unlock(&lcm->mutex);
     return handlers;
 }
 
 int lcm_try_enqueue_message(lcm_t *lcm, const char *channel)
 {
-    g_static_rec_mutex_lock(&lcm->mutex);
+    lcm_rec_mutex_lock(&lcm->mutex);
     GPtrArray *handlers = lcm_get_handlers(lcm, channel);
     int num_keepers = 0;
     for (unsigned int i = 0; i < handlers->len; i++) {
@@ -383,24 +437,24 @@ int lcm_try_enqueue_message(lcm_t *lcm, const char *channel)
             num_keepers++;
         }
     }
-    g_static_rec_mutex_unlock(&lcm->mutex);
+    lcm_rec_mutex_unlock(&lcm->mutex);
     return num_keepers > 0;
 }
 
 int lcm_has_handlers(lcm_t *lcm, const char *channel)
 {
     int has_handlers = 1;
-    g_static_rec_mutex_lock(&lcm->mutex);
+    lcm_rec_mutex_lock(&lcm->mutex);
     GPtrArray *handlers = lcm_get_handlers(lcm, channel);
     if (!handlers || !handlers->len)
         has_handlers = 0;
-    g_static_rec_mutex_unlock(&lcm->mutex);
+    lcm_rec_mutex_unlock(&lcm->mutex);
     return has_handlers;
 }
 
 int lcm_dispatch_handlers(lcm_t *lcm, lcm_recv_buf_t *buf, const char *channel)
 {
-    g_static_rec_mutex_lock(&lcm->mutex);
+    lcm_rec_mutex_lock(&lcm->mutex);
 
     GPtrArray *handlers = lcm_get_handlers(lcm, channel);
 
@@ -420,9 +474,9 @@ int lcm_dispatch_handlers(lcm_t *lcm, lcm_recv_buf_t *buf, const char *channel)
         lcm_subscription_t *h = (lcm_subscription_t *) g_ptr_array_index(handlers, i);
         if (!h->marked_for_deletion && h->num_queued_messages > 0) {
             h->num_queued_messages--;
-            int depth = g_static_rec_mutex_unlock_full(&lcm->mutex);
+            int depth = lcm_rec_mutex_unlock_full(&lcm->mutex);
             h->handler(buf, channel, h->userdata);
-            g_static_rec_mutex_lock_full(&lcm->mutex, depth);
+            lcm_rec_mutex_lock_full(&lcm->mutex, depth);
         }
     }
 
@@ -441,7 +495,7 @@ int lcm_dispatch_handlers(lcm_t *lcm, lcm_recv_buf_t *buf, const char *channel)
         g_hash_table_foreach(lcm->handlers_map, map_remove_handler_callback, h);
         lcm_handler_free(h);
     }
-    g_static_rec_mutex_unlock(&lcm->mutex);
+    lcm_rec_mutex_unlock(&lcm->mutex);
 
     return 0;
 }
@@ -492,16 +546,16 @@ int lcm_parse_url(const char *url, char **provider, char **network, GHashTable *
 
 int lcm_subscription_set_queue_capacity(lcm_subscription_t *subs, int num_messages)
 {
-    g_static_rec_mutex_lock(&subs->lcm->mutex);
+    lcm_rec_mutex_lock(&subs->lcm->mutex);
     subs->max_num_queued_messages = num_messages;
-    g_static_rec_mutex_unlock(&subs->lcm->mutex);
+    lcm_rec_mutex_unlock(&subs->lcm->mutex);
     return 0;
 }
 
 int lcm_subscription_get_queue_size(lcm_subscription_t *subs)
 {
-    g_static_rec_mutex_lock(&subs->lcm->mutex);
+    lcm_rec_mutex_lock(&subs->lcm->mutex);
     int result = subs->num_queued_messages;
-    g_static_rec_mutex_unlock(&subs->lcm->mutex);
+    lcm_rec_mutex_unlock(&subs->lcm->mutex);
     return result;
 }

@@ -16,9 +16,7 @@
 
 static int64_t timestamp_now()
 {
-    GTimeVal tv;
-    g_get_current_time(&tv);
-    return (int64_t) tv.tv_sec * 1000000 + tv.tv_usec;
+    return g_get_real_time();
 }
 
 static int64_t timestamp_seconds(int64_t v)

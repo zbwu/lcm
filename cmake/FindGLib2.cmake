@@ -71,6 +71,9 @@ _glib2_find_library(GLIB glib)
 _glib2_find_include(GLIB glib.h)
 _glib2_find_include(GLIBCONFIG glibconfig.h GLIB)
 
+# Suppress warnings, see https://cmake.org/cmake/help/v3.17/module/FindPackageHandleStandardArgs.html
+set(FPHSA_NAME_MISMATCHED 1)
+
 _glib2_add_target(glib GLIB GLIB GLIBCONFIG)
 
 if(WIN32 AND TARGET GLib2::glib)
@@ -111,6 +114,8 @@ foreach(_glib2_component ${GLib2_FIND_COMPONENTS})
   endif()
 
 endforeach()
+
+unset(FPHSA_NAME_MISMATCHED)
 
 list(APPEND GLib2_FIND_COMPONENTS glib)
 set(GLib2_FIND_REQUIRED_glib TRUE)
